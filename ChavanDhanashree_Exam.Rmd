@@ -1,0 +1,287 @@
+---
+title: "Final Exam"
+author: "Dhanashree"
+date: "25/03/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library("RSQLite")
+library("knitr")
+library("DBI")
+dbLGSales=dbConnect(RSQLite::SQLite(),dbname="~/Desktop/ITC6000/RSQLite/databases/LG_Sales.db")
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(connection = dbLGSales)
+```
+
+```{r}
+dbListTables(dbLGSales)
+```
+#Question-1: Generate a summary report to show number of paint products supplied by each vendor within the grouping of product type, product base, and product category. Ensure that the vendors are located outside the New England region. Display vendor ID, name, state.
+```{sql connection=dbLGSales, max.print=-1}
+SELECT LV.vend_id, 
+       vend_name, 
+       vend_state, 
+       LP.prod_type, 
+       LP.prod_base, 
+       LP.prod_category, 
+       Count(LS.prod_sku) NoOfPaintProducts 
+FROM   lgvendor LV 
+       LEFT JOIN lgsupplies LS 
+              ON LV.vend_id = LS.vend_id 
+       LEFT JOIN lgproduct LP 
+              ON LP.prod_sku = LS.prod_sku 
+WHERE  vend_state NOT IN ( "ME", "NH", "MA", "RI", "CT" ,"VT") 
+GROUP  BY LV.vend_id, 
+          LP.prod_type, 
+          LP.prod_base, 
+          LP.prod_category
+order by 1,2,3         
+```
+
+#Question-2: Generate a summary report to show number of suppliers for each paint product (i.e., Prod_SKU) within each brand (i.e., Brand_ID) that has more than one supplier. The results should include brand type, brand name, product SKU, supplier count.
+```{sql connection=dbLGSales, max.print=-1}
+SELECT LB.brand_type, 
+       LB.brand_name, 
+       LP.prod_sku, 
+       Count(LS.vend_id) SupplierCount 
+FROM   lgbrand LB 
+       INNER JOIN lgproduct LP 
+               ON LB.brand_id = LP.brand_id 
+       INNER JOIN lgsupplies LS 
+               ON LP.prod_sku = LS.prod_sku 
+GROUP  BY LB.brand_id, 
+          LP.prod_sku 
+HAVING Count(LS.vend_id) > 1 
+ORDER  BY 1, 
+          2, 
+          3 
+```
+
+#Question-3: Write a query to generate data for creating annual salary expense report for the company in terms of total annual salary and number of employees for each type of employee role (i.e.,employee title) in each department. Display department name, employee role, year, number of employees, and total salary expense.
+```{sql connection=dbLGSales, max.print=-1}
+SELECT LD.dept_name, 
+       LE.emp_title EmployeeRole, 
+       Strftime("%Y", sal_from) Year, 
+       Count(LE.emp_num)        NoOfEmployees, 
+       Sum(LS.sal_amount)       TotalSalaryExpense 
+FROM   lgdepartment LD 
+       INNER JOIN lgemployee LE 
+               ON LD.dept_num = LE.dept_num 
+       INNER JOIN lgsalary_history LS 
+               ON LS.emp_num = LE.emp_num 
+GROUP  BY year, 
+          LD.dept_num, 
+          LE.emp_title 
+ORDER  BY 1, 
+          2, 
+          3 
+```
+
+#[30 points split in 3 parts]: Generate a salary growth report for all employee at LG Sales in following steps.Note that the salary history table stores employee salary for each year of their service and the time period is stored in two columns Sal_From and Sal_End using YYYY-mm-dd format.
+
+```{sql connection=dbLGSales, max.print=-1}
+CREATE TEMP VIEW IF NOT EXISTS EmpJoiningSalary
+AS  
+SELECT LD.dept_name, 
+       LE.Emp_Num,
+       emp_lname 
+       || "," 
+       || emp_fname                    'EmployeeName', 
+       Strftime("%Y", LE.emp_hiredate) JoiningYear, 
+       LS.sal_amount                   JoiningSalary 
+FROM   lgemployee LE 
+       INNER JOIN lgdepartment LD 
+               ON LE.dept_num = LD.dept_num 
+       INNER JOIN lgsalary_history LS 
+               ON LE.emp_num = LS.emp_num 
+WHERE  LE.emp_hiredate = LS.sal_from 
+```
+#Question-4: Write a query to determine employee salary at the time of joining. Display department name, employee full name, joining year of employment, and joining salary.
+
+```{sql connection=dbLGSales, max.print=-1}
+select dept_name,EmployeeName, JoiningYear, JoiningSalary from EmpJoiningSalary ORDER BY 1,2         
+```
+
+```{sql connection=dbLGSales, max.print=-1}
+CREATE TEMP VIEW IF NOT EXISTS EmpLatestSalary
+AS  
+SELECT LD.dept_name, 
+       LE.Emp_Num,
+       emp_lname 
+       || "," 
+       || emp_fname                      'EmployeeName', 
+       Max (Strftime("%Y", LS.sal_from)) LatestEmpYear, 
+       Max(sal_amount)                   LatestSalary 
+FROM   lgemployee LE 
+       INNER JOIN lgdepartment LD 
+               ON LE.dept_num = LD.dept_num 
+       INNER JOIN lgsalary_history LS 
+               ON LE.emp_num = LS.emp_num 
+GROUP  BY LS.emp_num 
+```
+#[10 points] Question-5: Write a query to determine employee's most recent salary from salary history table along with their other information. Display department name, employee full name, latest year of employment, and latest salary.
+
+```{sql connection=dbLGSales, max.print=-1}
+select dept_name,EmployeeName,LatestEmpYear 'Latest Year Of Employment',LatestSalary from EmpLatestSalary ORDER  BY 1,2,3
+```
+
+#[10 points] Question-6: Write a query to determine each employee's salary growth in percentage (rounded up to 2 decimal values) during their tenure and number of years of employment with LG Paints company. Salary growth is calculated as [100 x (Latest salary – Joining Salary) / Joining Salary]. The number of years of employment is calculated as (Latest Year – Joining Year + 1). Display department name, employee full name, joining year of employment, joining salary, latest year of employment, latest salary, number of years in employment, salary growth. [HINT: Use the above two queries to develop the solution for this problem].
+
+```{sql connection=dbLGSales, max.print=-1}
+SELECT Ej.dept_name, 
+       EJ.employeename, 
+       joiningyear, 
+       joiningsalary, 
+       latestempyear 'Latest Year Of Employment', 
+       latestsalary, 
+       ( Cast(latestempyear AS INTEGER) - Cast(joiningyear AS INTEGER) + 1 ) 'NoOfYearsEmployment',
+       printf("%.2f", 100 * ( latestsalary - joiningsalary ) / ( joiningsalary * 1.0 ) ) SalaryGrowth
+FROM   empjoiningsalary EJ 
+       INNER JOIN emplatestsalary EL 
+               ON EJ.emp_num = EL.emp_num 
+ORDER BY 1,2               
+```
+
+#[20 points] Question-7: Write a query to generate data to be used for plotting monthly sales trends for each paint product. Display product SKU, month and year (separate columns or single column) average unit price at which paint product was sold, and the number of unique customers buying that paint product. The aggregated sales data should be in chronological order for each product (i.e. sorted for months within each year).
+```{sql connection=dbLGSales, max.print=-1}
+SELECT LP.prod_sku, 
+       Strftime("%Y", LI.inv_date)  year, 
+       Strftime("%m", LI.inv_date)  month, 
+       printf("%.2f",Avg(LL.line_price))           AverageUnitPrice, 
+       Count(DISTINCT LI.cust_code) NoOfUniqueCustomers 
+FROM   lgproduct LP 
+       INNER JOIN lgline LL 
+               ON LP.prod_sku = LL.prod_sku 
+       INNER JOIN lginvoice LI 
+               ON LI.inv_num = LL.inv_num 
+       INNER JOIN lgcustomer LC 
+               ON LC.cust_code = LI.cust_code
+GROUP  BY year, 
+          month, 
+          LP.prod_sku 
+ORDER  BY 1, 
+          2, 
+          3 
+```
+
+#[30 points split in two parts] The purpose of this queries is to generate employee performance report based on quarterly sales (derived from Invoice table directly) handled by them in each state.
+
+```{sql connection=dbLGSales, max.print=-1}
+CREATE TEMP VIEW IF NOT EXISTS EmpMonthlySales
+AS 
+SELECT Strftime("%Y", LI.inv_date) year, 
+       Strftime("%m", LI.inv_date) month, 
+       LE.emp_num, 
+       ( emp_lname 
+         || "," 
+         || emp_fname )            FullName, 
+       LC.cust_state, 
+       Count(LI.inv_total)         NoOfInvoicesHandled, 
+       Sum(LI.inv_total)           MonthlySales 
+FROM   lgemployee LE 
+       INNER JOIN lginvoice LI 
+               ON LE.emp_num = LI.emp_num 
+       INNER JOIN lgcustomer LC 
+               ON LC.cust_code = LI.cust_code 
+GROUP  BY LE.emp_num, 
+          LC.cust_state, 
+          year, 
+          month 
+```
+#[10 points] Question-8: Write query to generate monthly sales handled by each employee in each State (where customer resides). The “monthly sales handled” implies the aggregated invoice totals handled by employee in a month. Display state, year, month, employee ID (i.e., Emp_Num), employee full name,number of invoices handled in a month, monthly sales. NOTE: Employee full name is only for display purpose, whereas Emp_Num should be used for any data processing needs. 
+
+```{sql connection=dbLGSales, max.print=-1}
+select Cust_State State, year, month, Emp_Num , FullName, NoOfInvoicesHandled, MonthlySales from EmpMonthlySales ORDER BY 1,2,3,5
+```
+
+#[20 points] Question-9: Using the previous query write another query to generate quarterly sales rank report that ranks employees in each state (where customer resides) based on the descending order of their total quarterly sales handled by them (i.e. aggregated monthly sales corresponding to the quarter).Display state, year, quarter, employee ID (i.e., Emp_Num), employee full name, number of invoices handled in a quarter, total quarterly sales, and sales rank. NOTE: Employee full name is only for display purpose, whereas Emp_Num should be used for any data processing needs. Likewise, number of invoices handled is for display purpose and should not be used in ranking.
+
+```{sql connection=dbLGSales, max.print=-1}
+SELECT cust_state 'State', 
+       year, 
+       quarter, 
+       emp_num, 
+       fullname, 
+       noofinvoiceshandled 'Number of Invoices Handled', 
+       monthlysales 'Total Quarterly Sales', 
+       Row_number() 
+         OVER ( 
+           partition BY cust_state, year, quarter 
+           ORDER BY monthlysales DESC) AS SalesRank 
+FROM   (SELECT emp_num, 
+               fullname, 
+               cust_state, 
+               year, 
+               CASE 
+                 WHEN month BETWEEN "01" AND "03" THEN "Q1" 
+                 WHEN month BETWEEN "04" AND "06" THEN "Q2" 
+                 WHEN month BETWEEN "07" AND "09" THEN "Q3" 
+                 ELSE "Q4" 
+               END                      AS Quarter, 
+               Sum(noofinvoiceshandled) NoOfInvoicesHandled, 
+               Sum(monthlysales)        MonthlySales 
+        FROM   empmonthlysales 
+        GROUP  BY emp_num, 
+                  cust_state, 
+                  year, 
+                  quarter) 
+ORDER BY 1,2,3,salesrank                  
+```
+
+#[30 points] Bonus Question: Generate quarterly sales rank report that ranks each product of Value brand type (i.e., Brand_Type) in each State (where customer resides) based on the descending order of their total quarterly sales (i.e., in dollars). The results should display columns in the sequence: State, Product Category, Year, Quarter, Brand Name, Total Quarterly Sales, Brand’s Quarterly Rank. NOTE: the total sales are for products sold not customer invoice that can contain multiple products.
+
+```{sql connection=dbLGSales, max.print=-1}
+SELECT cust_state 'State', 
+       prod_category 'Product Category', 
+       year, 
+       quarter, 
+       brand_name, 
+       quarterlysales 'Total Quarterly Sales', 
+       Row_number() 
+         OVER ( 
+           partition BY cust_state, prod_category, year, quarter 
+           ORDER BY quarterlysales DESC) AS 'Brand’s Quarterly Rank' 
+FROM   (SELECT cust_state, 
+               prod_category, 
+               year, 
+               CASE 
+                 WHEN month BETWEEN "01" AND "03" THEN "Q1" 
+                 WHEN month BETWEEN "04" AND "06" THEN "Q2" 
+                 WHEN month BETWEEN "07" AND "09" THEN "Q3" 
+                 ELSE "Q4" 
+               END               AS Quarter, 
+               brand_id, 
+               brand_name, 
+               Sum(monthlysales) QuarterlySales 
+        FROM   (SELECT cust_state, 
+                       LP.prod_category, 
+                       Strftime("%Y", LI.inv_date)      year, 
+                       Strftime("%m", LI.inv_date)      month, 
+                       LB.brand_id, 
+                       LB.brand_name, 
+                       Sum(LL.line_qty * LL.line_price) MonthlySales 
+                FROM   lgbrand LB 
+                       INNER JOIN lgproduct LP 
+                               ON LB.brand_id = LP.brand_id 
+                       INNER JOIN lgline LL 
+                               ON LL.prod_sku = LP.prod_sku 
+                       INNER JOIN lginvoice LI 
+                               ON LI.inv_num = LL.inv_num 
+                       INNER JOIN lgcustomer LC 
+                               ON LC.cust_code = LI.cust_code 
+                WHERE  LB.brand_type LIKE "value" 
+                GROUP  BY cust_state, 
+                          year, 
+                          month, 
+                          LP.prod_category, 
+                          LB.brand_id) 
+        GROUP  BY cust_state, 
+                  year, 
+                  quarter, 
+                  prod_category, 
+                  brand_id) 
+ORDER  BY 1, 
+          3, 
+          4
+```
