@@ -1,0 +1,114 @@
+---
+title: "LG Sales Queries"
+author: "Dhanashree"
+date: "3/3/2020"
+output:
+  html_document: default
+---
+```{r setup, include=FALSE}
+library("RSQLite")
+library("knitr")
+library("DBI")
+dbLGSales=dbConnect(RSQLite::SQLite(),dbname="~/Desktop/ITC6000/RSQLite/databases/LG_Sales.db")
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(connection = dbLGSales)
+```
+
+```{r}
+dbListTables(dbLGSales)
+```
+
+# Question-1: Display the list of all departments and their information in the company. The output should be sorted by department names
+
+```{sql connection=dbLGSales, max.print=-1}
+SELECT * 
+FROM   lgdepartment 
+ORDER  BY dept_name 
+```
+
+#Question-2: Generate the list of all products and their information that have solvent as product base and are of either Filler or Cleaner category. Display the result in the sorted order of product type and product category.
+
+```{sql connection=dbLGSales, max.print=-1}
+SELECT * 
+FROM   lgproduct 
+WHERE  prod_base LIKE 'Solvent' 
+       AND ( prod_category LIKE 'Filler' 
+              OR prod_category LIKE 'Cleaner' ) 
+ORDER  BY prod_type, 
+          prod_category
+```
+
+#Question-3: Display list of all employees hired in the period July 2010 to June 2014. Employee name should be displayed in a single column called “FullName” (use the convention last name, first name) Sort the output by year of hire, FullName. The result should include columns full name, title, email, hire date, and year of hire. 
+
+```{sql connection=dbLGSales, max.print=-1}
+SELECT emp_lname 
+       || "," 
+       || emp_fname 'FullName', 
+       emp_title,
+       emp_email, 
+       emp_hiredate, 
+       Strftime("%Y", emp_hiredate) HireYear
+FROM   lgemployee 
+WHERE  emp_hiredate BETWEEN '2010-07-01' AND '2014-06-30' 
+ORDER  BY HireYear, 
+          FullName
+```
+
+#Question-4: Generate annual sales of paints purchased for each customer by Brand name, paint product’s type,and category. Display customer full name (last name, first name), city, state, purchase year,product type,product category, brand name, annual sales (in $). [Hint: product level annual sales need to be calculated using appropriate formula and tables.]
+
+```{sql connection=dbLGSales, max.print=-1}
+SELECT cust_lname 
+       || "," 
+       || cust_fname                    'FullName', 
+       LC.cust_city,  
+       LC.cust_state,
+       Strftime("%Y", inv_date)         PurchaseYear, 
+       LP.prod_type, 
+       LP.prod_category, 
+       LB.brand_name, 
+      printf("$ %.2f", Sum(LL.line_qty * LL.line_price))  AnnualSales
+FROM   lgcustomer LC 
+       INNER JOIN lginvoice LI 
+               ON LC.cust_code = LI.cust_code 
+       INNER JOIN lgline LL 
+               ON LL.inv_num = LI.inv_num 
+       INNER JOIN lgproduct LP 
+               ON LP.prod_sku = LL.prod_sku 
+       INNER JOIN lgbrand LB 
+               ON LB.brand_id = LP.brand_id 
+GROUP  BY purchaseyear,
+          fullname, 
+          brand_name, 
+          prod_type, 
+          prod_category 
+ORDER  BY fullname, purchaseyear     
+```
+
+#Question-5: The company is planning a new promotion for New York (NY) and Massachusetts (MA) markets and wants to know about the largest purchases made by customers in that state. Write a query to display the customer code, customer’s full name (last name, first name), city, state, purchase month, purchase year, and largest purchase value (i.e., invoice total) made by each customer. Sort the results by customer full name in each city and state.
+
+```{sql connection=dbLGSales, max.print=-1}
+WITH t 
+     AS (SELECT *, 
+                Row_number() 
+                  OVER ( 
+                    partition BY LC.cust_code 
+                    ORDER BY li.inv_total DESC) AS Rnk 
+         FROM   lgcustomer LC 
+                INNER JOIN lginvoice LI 
+                        ON lc.cust_code = li.cust_code 
+         WHERE  cust_state IN ( 'NY', 'MA' )) 
+SELECT cust_code, 
+       cust_lname 
+       || "," 
+       || cust_fname            'FullName', 
+       cust_city                'City', 
+       cust_state               'State', 
+       Strftime("%m", inv_date) PurchaseMonth, 
+       Strftime("%Y", inv_date) PurchaseYear, 
+       inv_total                'Largest Purchase' 
+FROM   t 
+WHERE  rnk = 1 
+ORDER  BY state, 
+          city, 
+          fullname;  
+```

@@ -1,0 +1,360 @@
+---
+title: "Assignment-3: Complex Queries using RStudio/SQLite"
+author: "Dhanashree"
+date: "15/03/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library("RSQLite")
+library("knitr")
+library("DBI")
+dbLGSales=dbConnect(RSQLite::SQLite(),dbname="~/Desktop/ITC6000/RSQLite/databases/LG_Sales.db")
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(connection = dbLGSales)
+```
+
+```{r}
+dbListTables(dbLGSales)
+```
+# Question-1: List all customers using a negative subquery who do not reside in the New England
+region {if needed, do a google search to find out what states are considered part of New England region}. Show
+customer’s full name, city, state, and zip in the sorted order. 
+```{sql connection=dbLGSales, max.print=-1}
+SELECT * 
+FROM   lgcustomer 
+WHERE  cust_code IN (SELECT cust_code 
+                         FROM   lgcustomer 
+                         WHERE  cust_state NOT IN ( 'ME', 'NH', 'MA', 'RI', 'CT'  )) 
+ORDER  BY cust_code 
+```
+
+#Question-2: Generate inventory status report of all products that have current inventory level (i.e.,Prod_QOH) lower than 120% of Reorder points (i.e., Prod_Min). Include a column for Procurement Instruction indicating “order immediately” if current inventory is not above the reorder point; and as “order soon” if current inventory is above reorder point but lesser than 120% of reorder pint. Final query output should show Product SKU, Brand Name, Brand Type, Product Type, Product Base, Product Category, Product Price, Quantity On Hand, Reorder level, Procurement Instruction, Vendor Name
+```{sql connection=dbLGSales, max.print=-1}
+SELECT LP.prod_sku   'Product SKU', 
+       brand_name    'Brand Name', 
+       brand_type    'Brand Type', 
+       prod_type     'Product Type', 
+       prod_base     'Product Base', 
+       prod_category 'Product Category', 
+       prod_price    'Product Price', 
+       prod_qoh      'Quantity On Hand', 
+       prod_min      'Reorder level', 
+       CASE 
+         WHEN prod_qoh <= prod_min THEN 'Order Immediately' 
+         WHEN ( ( prod_qoh > prod_min ) 
+                AND ( prod_qoh < ( 1.2 * prod_min ) ) ) THEN 'Order Soon' 
+         ELSE 'Sufficient Stock in Inventory' 
+       END           'Procurement Instruction', 
+       vend_name     'Vendor Name' 
+FROM   lgproduct LP 
+       INNER JOIN lgbrand LB 
+               ON LP.brand_id = LB.brand_id 
+       INNER JOIN lgsupplies LS 
+               ON LS.prod_sku = LP.prod_sku 
+       INNER JOIN lgvendor LV 
+               ON LV.vend_id = LS.vend_id 
+WHERE  prod_qoh < ( 1.2 * prod_min ) 
+```
+
+#Question-3: Develop a query to generate necessary information for monthly sales (in $$) report of paint products for each brand name of different brand types. The report should show $0 if no product was sold in a month. Show the results in the sorted order of brand types and brand names.
+```{sql connection=dbLGSales, max.print=-1}
+WITH months 
+     AS (SELECT "01", 
+                "2015" 
+         UNION 
+         SELECT "02", 
+                "2015" 
+         UNION 
+         SELECT "03", 
+                "2015" 
+         UNION 
+         SELECT "04", 
+                "2015" 
+         UNION 
+         SELECT "05", 
+                "2015" 
+         UNION 
+         SELECT "06", 
+                "2015" 
+         UNION 
+         SELECT "07", 
+                "2015" 
+         UNION 
+         SELECT "08", 
+                "2015" 
+         UNION 
+         SELECT "09", 
+                "2015" 
+         UNION 
+         SELECT "10", 
+                '2015' 
+         UNION 
+         SELECT "11", 
+                "2015" 
+         UNION 
+         SELECT "12", 
+                "2015" 
+         UNION 
+         SELECT "01", 
+                "2016"), 
+     brands 
+     AS (SELECT brand_name, 
+                brand_type 
+         FROM   lgbrand) 
+         
+SELECT view1.*, 
+       printf("$ %.2f", Ifnull(monthlysales, 0)) MonthlySales
+FROM   (SELECT B.brand_name, 
+               B.brand_type, 
+               M."01"   AS Month, 
+               M."2015" AS Year 
+        FROM   brands B 
+               CROSS JOIN months M) view1 
+       LEFT JOIN  (SELECT LB.brand_name, 
+                                 LB.brand_type, 
+                                 Strftime("%Y", LI.inv_date) AS Year, 
+                                 Strftime("%m", LI.inv_date) AS Month, 
+                              Sum(Ifnull((line_qty*line_Price), 0)) 'MonthlySales'    
+                          FROM   lgbrand LB 
+                                 INNER JOIN lgproduct LP 
+                                        ON LB.brand_id = LP.brand_id 
+                                 INNER JOIN lgline LL 
+                                        ON LL.prod_sku = LP.prod_sku 
+                                 INNER JOIN lginvoice LI 
+                                        ON LI.inv_num = LL.inv_num
+                                        GROUP  BY brand_name, 
+                            brand_type, 
+                            year, 
+                            month) 
+                                         view2 
+              ON view1.brand_name = view2.brand_name 
+                 AND view1.brand_type = view2.brand_type 
+                 AND view1.year = view2.year 
+                 AND view1.month = view2.month 
+ORDER  BY 1, 
+          4, 
+          3 
+```
+
+# Question-4: Generate a list of lowest and highest selling paint products for each category of paint products in each state during each quarter of 2015. Display all necessary columns.
+```{sql connection=dbLGSales, max.print=-1}
+WITH s AS 
+( 
+         SELECT   state, 
+                  year, 
+                  CASE 
+                           WHEN months < "04" THEN "Q1" 
+                           WHEN months < "07" THEN "Q2" 
+                           WHEN months < "10" THEN "Q3" 
+                           ELSE "Q4" 
+                  END AS quarters, 
+                  prod_category, 
+                  prod_sku, 
+                  productsales , 
+                  row_number() OVER ( partition BY state, year, 
+                  CASE 
+                           WHEN months < "04" THEN "Q1" 
+                           WHEN months < "07" THEN "Q2" 
+                           WHEN months < "10" THEN "Q3" 
+                           ELSE "Q4" 
+                  END , prod_category ORDER BY productsales ASC) AS rnk1, 
+                  row_number() OVER ( partition BY state, year, 
+                  CASE 
+                           WHEN months < "04" THEN "Q1" 
+                           WHEN months < "07" THEN "Q2" 
+                           WHEN months < "10" THEN "Q3" 
+                           ELSE "Q4" 
+                  END , prod_category ORDER BY productsales ASC) AS rnk2
+FROM   ( 
+                  SELECT     lc.cust_state state, 
+                             lp.prod_category, 
+                             lp.prod_sku, 
+                             Strftime("%Y", li.inv_date) year, 
+                             Strftime("%m", li.inv_date) months, 
+                             Sum(line_qty*line_price)    productsales 
+                  FROM       lgproduct LP 
+                  INNER JOIN lgline LL 
+                  ON         ll.prod_sku=lp.prod_sku 
+                  INNER JOIN lginvoice LI 
+                  ON         li.inv_num=ll.inv_num 
+                  INNER JOIN lgcustomer LC 
+                  ON         lc.cust_code=li.cust_code 
+                  WHERE      year="2015" 
+                  GROUP BY   state, 
+                             months, 
+                             lp.prod_category, 
+                             lp.prod_sku 
+                  ORDER BY   1, 
+                             5, 
+                             2, 
+                             3))
+
+SELECT view2.state 'State', 
+       view2.year 'Year', 
+       view2.quarters 'Quarter', 
+       view2.prod_category 'Product Category', 
+       view1.prod_sku      'Product with Minimum Sales', 
+       view2.prod_sku      'Product with Maximum Sales' 
+FROM   (SELECT state, 
+               year, 
+               quarters, 
+               prod_category, 
+               prod_sku, 
+               Min(rnk1) AS MinSalesProduct 
+        FROM   s 
+        GROUP  BY state, 
+                  year, 
+                  quarters, 
+                  prod_category)view1 
+       INNER JOIN (SELECT state, 
+                          year, 
+                          quarters, 
+                          prod_category, 
+                          prod_sku, 
+                          Max(rnk2) AS MaxSalesProduct 
+                   FROM   s 
+                   GROUP  BY state, 
+                             year, 
+                             quarters, 
+                             prod_category)view2 
+               ON view1.state = view2.state 
+                  AND view1.year = view2.year 
+                  AND view1.quarters = view2.quarters 
+                  AND view1.prod_category = view2.prod_category 
+ORDER  BY 1, 
+          2, 
+          3, 
+          4  
+``` 
+  
+# Question-5: Develop a query to generate annual sales variance report of sales for each paint product (Prod_SKU) within each brand type, product type, product base, product category. The sales variance for a product is calculated as the deviations from (a) national average annual sales, and (b) state average annual sales for all paint products within their group (identified thru the combination of brand type, product type, product base, and product category). The result should show brand type, product type, product base, product category, product SKU, aggregation level, annual average sales, sales variance. The column “aggregation level” will be either ‘national’ or state codes.
+```{sql connection=dbLGSales, max.print=-1}
+WITH nationalsales 
+     AS (SELECT Strftime("%Y", LI.inv_date)                year, 
+                LB.brand_type, 
+                LP.prod_type, 
+                LP.prod_base, 
+                LP.prod_category, 
+                Sum(line_qty * line_price) / Sum(line_qty) NationalAvgSales
+         FROM   lgproduct LP 
+                INNER JOIN lgbrand LB 
+                        ON LP.brand_id = LB.brand_id 
+                INNER JOIN lgline LL 
+                        ON LP.prod_sku = LL.prod_sku 
+                INNER JOIN lginvoice LI 
+                        ON LL.inv_num = LI.inv_num 
+         GROUP  BY year, 
+                   LB.brand_type, 
+                   LP.prod_type, 
+                   LP.prod_base, 
+                   LP.prod_category), 
+     statessales 
+     AS (SELECT Strftime("%Y", LI.inv_date)                year, 
+                LC.cust_state                              STATE, 
+                LB.brand_type, 
+                LP.prod_type, 
+                LP.prod_base, 
+                LP.prod_category, 
+                Sum(line_qty * line_price) / Sum(line_qty) StateAvgSales 
+         FROM   lgproduct LP 
+                INNER JOIN lgbrand LB 
+                        ON LP.brand_id = LB.brand_id 
+                INNER JOIN lgline LL 
+                        ON LP.prod_sku = LL.prod_sku 
+                INNER JOIN lginvoice LI 
+                        ON LL.inv_num = LI.inv_num 
+                INNER JOIN lgcustomer LC 
+                        ON LC.cust_code = LI.cust_code 
+         GROUP  BY year, 
+                   state, 
+                   LB.brand_type, 
+                   LP.prod_type, 
+                   LP.prod_base, 
+                   LP.prod_category) 
+
+SELECT year, 
+       brand_type, 
+       prod_type, 
+       prod_base, 
+       prod_category, 
+       prod_sku, 
+       'National' AggregationLevel, 
+       AnnualAverageSales, 
+       Printf("%f", Sum(variance)) 'SalesVariance' 
+FROM   (SELECT Strftime("%Y", li.inv_date)                           year, 
+               lb.brand_type, 
+               lp.prod_type, 
+               lp.prod_base, 
+               lp.prod_category, 
+               lp.prod_sku, 
+               ll.line_qty                                           Qty, 
+               ll.line_price                                         Price, 
+               NS.nationalavgsales 'AnnualAverageSales', 
+               ( ll.line_price - NS.nationalavgsales ) * ll.line_qty 'Variance'
+        FROM   lgproduct LP 
+               INNER JOIN lgbrand LB 
+                       ON lp.brand_id = lb.brand_id 
+               INNER JOIN lgline LL 
+                       ON lp.prod_sku = ll.prod_sku 
+               INNER JOIN lginvoice LI 
+                       ON ll.inv_num = li.inv_num 
+               INNER JOIN nationalsales NS 
+                       ON NS.year = Strftime("%Y", li.inv_date) 
+                          AND NS.brand_type = lb.brand_type 
+                          AND NS.prod_type = Lp.prod_type 
+                          AND NS.prod_base = lp.prod_base 
+                          AND NS.prod_category = LP.prod_category) 
+GROUP  BY year, 
+          brand_type, 
+          prod_type, 
+          prod_base, 
+          prod_category, 
+          prod_sku 
+UNION ALL 
+SELECT year, 
+       brand_type, 
+       prod_type, 
+       prod_base, 
+       prod_category, 
+       prod_sku, 
+       cust_state 'AggregationLevel',
+       AnnualAverageSales, 
+       Printf("%f", Sum(variance)) 'SalesVariance' 
+FROM   (SELECT LC.cust_state, 
+               Strftime("%Y", li.inv_date)                        year, 
+               lb.brand_type, 
+               lp.prod_type, 
+               lp.prod_base, 
+               lp.prod_category, 
+               lp.prod_sku, 
+               ll.line_qty                                        Qty, 
+               ll.line_price                                      Price, 
+               SS.stateavgsales 'AnnualAverageSales', 
+               ( ll.line_price - SS.stateavgsales ) * ll.line_qty 'Variance'
+        FROM   lgproduct LP 
+               INNER JOIN lgbrand LB 
+                       ON lp.brand_id = lb.brand_id 
+               INNER JOIN lgline LL 
+                       ON lp.prod_sku = ll.prod_sku 
+               INNER JOIN lginvoice LI 
+                       ON ll.inv_num = li.inv_num 
+               INNER JOIN lgcustomer LC 
+                       ON LC.cust_code = LI.cust_code 
+               INNER JOIN statessales SS 
+                       ON SS.year = Strftime("%Y", li.inv_date) 
+                          AND SS.state= LC.Cust_State
+                          AND SS.brand_type = lb.brand_type 
+                          AND SS.prod_type = Lp.prod_type 
+                          AND SS.prod_base = lp.prod_base 
+                          AND SS.prod_category = LP.prod_category) 
+GROUP  BY cust_state, 
+          year, 
+          brand_type, 
+          prod_type, 
+          prod_base, 
+          prod_category, 
+          prod_sku
+ORDER BY 1,7,2,3,4,5          
+```
+
